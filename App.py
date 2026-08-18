@@ -1,5 +1,15 @@
-import streamlit as st
+import os
+from typing import Any
+
 import pandas as pd
+import streamlit as st
+
+from xtf import Router
+
+
+# ============================================================
+# PAGE CONFIG
+# ============================================================
 
 st.set_page_config(
     page_title="Swedish Election X Monitor 2026",
@@ -7,108 +17,298 @@ st.set_page_config(
     layout="wide",
 )
 
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+DEFAULT_QUERY = "svensk politik"
+
+# Read Nitter configuration from Streamlit Secrets first,
+# then environment variables.
+XTF_NITTER = st.secrets.get(
+    "XTF_NITTER",
+    os.getenv("XTF_NITTER", ""),
+).strip()
+
+# Keep backend explicit. Search is handled through Nitter.
+BACKEND = "nitter"
+
+
+# ============================================================
+# HEADER
+# ============================================================
+
 st.title("🇸🇪 Swedish Election X Monitor 2026")
-st.caption("Experimental X/Twitter data collector")
 
-st.sidebar.header("Search")
-
-query = st.sidebar.text_input(
-    "Search X",
-    value="svensk politik",
+st.caption(
+    "Free X-data prototype using x-tweet-fetcher 3.1.0 + Nitter"
 )
 
-limit = st.sidebar.slider(
-    "Number of posts",
-    min_value=5,
-    max_value=100,
-    value=20,
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+with st.sidebar:
+    st.header("⚙️ X Search")
+
+    query = st.text_input(
+        "Search query",
+        value=DEFAULT_QUERY,
+        placeholder="e.g. svensk politik",
+    )
+
+    limit = st.slider(
+        "Number of posts",
+        min_value=5,
+        max_value=100,
+        value=20,
+        step=5,
+    )
+
+    st.divider()
+
+    st.subheader("Backend")
+
+    st.write("Nitter")
+
+    if XTF_NITTER:
+        st.success("Nitter endpoint configured")
+    else:
+        st.error("Nitter endpoint missing")
+
+    st.divider()
+
+    st.subheader("🇸🇪 Example searches")
+
+    examples = [
+        "svensk politik",
+        "riksdagsval 2026",
+        "valet 2026",
+        "Socialdemokraterna",
+        "Moderaterna",
+        "Sverigedemokraterna",
+        "Magdalena Andersson",
+        "Ulf Kristersson",
+    ]
+
+    for example in examples:
+        st.code(example)
+
+
+# ============================================================
+# NITTER CONFIGURATION CHECK
+# ============================================================
+
+if not XTF_NITTER:
+
+    st.warning(
+        """
+        ### Nitter is not configured
+
+        `x-tweet-fetcher` defaults to:
+
+        `http://127.0.0.1:8788`
+
+        That address is inside the Streamlit container and does not
+        provide a Nitter server.
+
+        Add a reachable Nitter server to Streamlit Secrets:
+
+        `XTF_NITTER = "https://your-nitter-server"`
+
+        Multiple servers can be supplied as comma-separated URLs.
+        """
+    )
+
+    st.stop()
+
+
+# ============================================================
+# SHOW CONFIGURATION WITHOUT EXPOSING SECRETS
+# ============================================================
+
+def clean_nitter_display(value: str) -> str:
+    """Display configured Nitter hosts without exposing anything sensitive."""
+    hosts = []
+
+    for item in value.split(","):
+        item = item.strip()
+
+        if not item:
+            continue
+
+        # Remove protocol for cleaner display.
+        display = (
+            item.replace("https://", "")
+            .replace("http://", "")
+            .rstrip("/")
+        )
+
+        hosts.append(display)
+
+    return ", ".join(hosts)
+
+
+with st.expander("🔌 Connection configuration"):
+    st.write("Backend:", BACKEND)
+    st.write("Nitter:", clean_nitter_display(XTF_NITTER))
+
+
+# ============================================================
+# SEARCH FUNCTION
+# ============================================================
+
+@st.cache_resource
+def create_router() -> Router:
+    """
+    Create the x-tweet-fetcher router.
+
+    XTF_NITTER is read by x-tweet-fetcher from the environment.
+    """
+    os.environ["XTF_NITTER"] = XTF_NITTER
+
+    return Router(
+        backend=BACKEND,
+    )
+
+
+def search_x(query_text: str, search_limit: int) -> list[Any]:
+
+    router = create_router()
+
+    results = router.search(
+        query_text,
+        limit=search_limit,
+    )
+
+    # Convert the returned object into a normal list.
+    if results is None:
+        return []
+
+    return list(results)
+
+
+# ============================================================
+# SEARCH BUTTON
+# ============================================================
+
+search_clicked = st.button(
+    "🔎 Search X",
+    type="primary",
+    use_container_width=True,
 )
 
-backend = st.sidebar.selectbox(
-    "Backend",
-    ["auto", "nitter", "browser"],
-)
 
-if st.button("🔎 Search X", type="primary"):
+# ============================================================
+# SEARCH
+# ============================================================
 
-    with st.spinner("Searching X..."):
+if search_clicked:
+
+    if not query.strip():
+        st.error("Enter a search query.")
+        st.stop()
+
+    with st.spinner(
+        f'Searching X for "{query.strip()}"...'
+    ):
 
         try:
-            from xtf import Router
 
-            router = Router(backend=backend)
-
-            results = router.search(
-                query,
-                limit=limit,
+            results = search_x(
+                query.strip(),
+                limit,
             )
 
-            if not results:
-                st.warning(
-                    "No results returned. "
-                    "The selected X backend may not be available."
-                )
-            else:
-                rows = []
-
-                for tweet in results:
-
-                    if hasattr(tweet, "to_dict"):
-                        data = tweet.to_dict()
-                    elif isinstance(tweet, dict):
-                        data = tweet
-                    else:
-                        data = vars(tweet)
-
-                    rows.append(data)
-
-                df = pd.DataFrame(rows)
-
-                st.success(
-                    f"Retrieved {len(df)} posts."
-                )
-
-                st.subheader("Posts")
-
-                st.dataframe(
-                    df,
-                    use_container_width=True,
-                )
-
-                st.subheader("Raw data")
-
-                st.json(rows)
-
-        except Exception as e:
+        except Exception as exc:
 
             st.error("X search failed.")
 
             st.code(
-                str(e),
+                str(exc),
                 language="text",
             )
 
-            st.info(
+            st.warning(
                 """
-                This is expected if no working Nitter
-                instance or browser backend is available.
+                The application is installed correctly, but the
+                configured Nitter server could not complete the search.
 
-                We will use the error to determine the
-                correct deployment architecture.
+                Check that:
+
+                1. XTF_NITTER is a real reachable Nitter server.
+                2. The Nitter server is online.
+                3. The URL does not point to 127.0.0.1.
+                4. The server supports `/search`.
                 """
             )
 
+            st.stop()
 
-st.divider()
+    # ========================================================
+    # RESULTS
+    # ========================================================
 
-st.subheader("About")
+    if not results:
 
-st.write(
-    """
-This application tests X/Twitter collection using
-the open-source x-tweet-fetcher project.
+        st.info(
+            "No X posts were returned for this search."
+        )
 
-The project supports FxTwitter, Nitter and browser
-backends and provides a unified Tweet data structure.
-"""
-)
+        st.stop()
+
+    st.success(
+        f"Retrieved {len(results)} results."
+    )
+
+    # ========================================================
+    # NORMALIZE RESULTS
+    # ========================================================
+
+    rows = []
+
+    for item in results:
+
+        if isinstance(item, dict):
+
+            row = item.copy()
+
+        else:
+
+            # Try to convert model/object results into a dictionary.
+            try:
+                row = vars(item)
+            except TypeError:
+                row = {
+                    "result": str(item)
+                }
+
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+
+    # ========================================================
+    # RESULTS TABLE
+    # ========================================================
+
+    st.subheader("📊 X Search Results")
+
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # ========================================================
+    # RAW RESULTS
+    # ========================================================
+
+    with st.expander("🔍 Raw results"):
+
+        for index, result in enumerate(results, start=1):
+
+            st.markdown(f"### Result {index}")
+
+            st.write(result)
