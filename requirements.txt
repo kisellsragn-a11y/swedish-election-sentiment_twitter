@@ -1,3 +1,4 @@
+
 streamlit
-x-tweet-fetcher
 pandas
+git+https://github.com/ythx-101/x-tweet-fetcher.git
