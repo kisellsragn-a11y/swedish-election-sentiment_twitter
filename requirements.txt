@@ -1,1 +1,3 @@
-
+streamlit
+x-tweet-fetcher
+pandas
